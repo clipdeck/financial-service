@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: financial-service
+  namespace: clipdeck
+  labels:
+    app.kubernetes.io/name: financial-service
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: clipdeck
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3004
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: financial-service

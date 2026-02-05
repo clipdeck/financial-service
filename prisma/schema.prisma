@@ -1,0 +1,90 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Balance {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  available Int      @default(0)
+  pending   Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+model Transaction {
+  id          String          @id @default(uuid())
+  userId      String
+  campaignId  String?
+  amount      Int
+  type        TransactionType
+  description String?
+  createdAt   DateTime        @default(now())
+
+  @@index([userId])
+  @@index([campaignId])
+  @@index([type])
+}
+
+model LeaderboardEntry {
+  id           String   @id @default(uuid())
+  campaignId   String
+  editorId     String
+  submissionId String   @unique
+  views        Int      @default(0)
+  likes        Int      @default(0)
+  engagement   Float    @default(0)
+  score        Float    @default(0)
+  rank         Int?
+  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now())
+
+  @@index([campaignId, score])
+  @@index([editorId, campaignId])
+}
+
+model PrizeDistribution {
+  id         String   @id @default(uuid())
+  campaignId String
+  position   Int
+  reward     Int
+  label      String
+  createdAt  DateTime @default(now())
+
+  @@unique([campaignId, position])
+  @@index([campaignId])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String
+  action    String
+  details   String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+enum TransactionType {
+  DEPOSIT
+  FUNDING
+  FEE
+  RESERVATION
+  PAYOUT
+  REFUND
+  WITHDRAWAL
+}
+
+enum LeaderboardMetric {
+  VIEWS
+  LIKES
+  ENGAGEMENT
+}
