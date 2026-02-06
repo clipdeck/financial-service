@@ -88,3 +88,20 @@ enum LeaderboardMetric {
   LIKES
   ENGAGEMENT
 }
+
+// ============================================================================
+// Cross-Service Cache Models (event-synced, read-only)
+// ============================================================================
+
+model CampaignCache {
+  id          String   @id            // Same ID as in campaign-service
+  title       String
+  status      String
+  createdBy   String?
+  totalBudget Int?
+  isFunded    Boolean  @default(false)
+  syncedAt    DateTime @default(now())
+
+  @@index([status])
+  @@index([syncedAt])
+}

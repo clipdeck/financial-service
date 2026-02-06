@@ -6,6 +6,8 @@ import { config } from '../config';
 import { handleClipApproved } from '../sagas/clipApproval';
 import { handleCampaignEnded } from '../sagas/campaignClosure';
 import { logAudit } from '../middleware/auditLog';
+import { syncCampaignCache, getCampaignFromCache } from '../services/cacheService';
+import { campaignClient } from '../lib/serviceClients';
 
 let consumer: EventConsumer | null = null;
 
@@ -18,7 +20,7 @@ export async function setupEventHandlers() {
     connectionUrl: config.rabbitmqUrl,
     exchange: config.eventExchange,
     queueName: 'financial.events',
-    routingKeys: ['clip.approved', 'clip.rejected', 'campaign.ended', 'campaign.funded'],
+    routingKeys: ['clip.approved', 'clip.rejected', 'campaign.ended', 'campaign.funded', 'campaign.created', 'campaign.status_changed'],
     enableLogging: true,
     logger: {
       info: (msg, data) => logger.info(data, msg),
@@ -51,33 +53,41 @@ export async function setupEventHandlers() {
     )
   );
 
-  // Handle campaign ended: run closure saga
+  // Handle campaign ended: run closure saga using cached data
   consumer.on(
     'campaign.ended',
     withRetry(
       withLogging(async (event, ctx) => {
         const { campaignId, hasLeaderboard, totalPaid } = event.payload;
 
-        // Fetch full campaign data from campaign-service for the saga
         try {
-          const response = await fetch(`${config.campaignServiceUrl}/campaigns/${campaignId}`);
-          if (!response.ok) {
+          // Try cache first, then fallback to API
+          let campaignData = await getCampaignFromCache(campaignId);
+
+          if (!campaignData && campaignClient) {
+            const response = await campaignClient.get(`/campaigns/${campaignId}`);
+            campaignData = response.data;
+          }
+
+          if (!campaignData) {
             logger.error({ campaignId }, 'Failed to fetch campaign data for closure');
             await ctx.nack(true);
             return;
           }
 
-          const campaignData = (await response.json()) as Record<string, any>;
           await handleCampaignEnded(campaignId, {
             campaignId,
-            createdBy: campaignData.createdBy ?? campaignData.ownerId,
+            createdBy: campaignData.createdBy ?? '',
             title: campaignData.title ?? '',
             totalBudget: campaignData.totalBudget ?? 0,
-            spentBudget: campaignData.spentBudget ?? totalPaid ?? 0,
+            spentBudget: totalPaid ?? 0,
             isFunded: campaignData.isFunded ?? false,
-            enableLeaderboard: campaignData.enableLeaderboard ?? hasLeaderboard,
+            enableLeaderboard: hasLeaderboard,
             hasLeaderboard,
           });
+
+          // Update cache with ended status
+          await syncCampaignCache(campaignId, { status: 'ENDED' });
 
           await ctx.ack();
         } catch (error) {
@@ -88,7 +98,7 @@ export async function setupEventHandlers() {
     )
   );
 
-  // Handle campaign funded: log the funding transaction
+  // Handle campaign funded: log the funding transaction + sync cache
   consumer.on(
     'campaign.funded',
     withRetry(
@@ -110,7 +120,36 @@ export async function setupEventHandlers() {
           amount,
         });
 
+        // Sync campaign cache with funded status
+        await syncCampaignCache(campaignId, { isFunded: true });
+
         logger.info({ campaignId, amount, fundedBy }, 'Campaign funding recorded');
+        await ctx.ack();
+      })
+    )
+  );
+
+  // Handle campaign created: cache campaign data
+  consumer.on(
+    'campaign.created',
+    withRetry(
+      withLogging(async (event, ctx) => {
+        const { campaignId, title, ownerId } = event.payload;
+        await syncCampaignCache(campaignId, { title, createdBy: ownerId, status: 'ACTIVE' });
+        logger.info({ campaignId, title }, 'Campaign created - cached');
+        await ctx.ack();
+      })
+    )
+  );
+
+  // Handle campaign status changed: update cache
+  consumer.on(
+    'campaign.status_changed',
+    withRetry(
+      withLogging(async (event, ctx) => {
+        const { campaignId, newStatus } = event.payload;
+        await syncCampaignCache(campaignId, { status: newStatus });
+        logger.debug({ campaignId, newStatus }, 'Campaign status changed - cache synced');
         await ctx.ack();
       })
     )
